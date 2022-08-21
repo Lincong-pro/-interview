@@ -17,10 +17,12 @@ public:
     }
     void testStop() {
         ThreadPool::globalInstance()->start(16);
-        for(int i=0;i<16;++i) {
+        for(int i=0;i<49;++i) {
             ThreadPool::globalInstance()->push(std::bind(&PoolTest::threadRunningCase1,this));
         }
         ThreadPool::globalInstance()->push(std::bind(&PoolTest::threadRunningCase2,this));
+        std::cout << "main thread starts to sleep\n";
+        std::this_thread::sleep_for(std::chrono::seconds(10));
         ThreadPool::globalInstance()->stop();
     }
 private:

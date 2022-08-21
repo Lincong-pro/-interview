@@ -216,29 +216,19 @@ public:
         isRunning = false;
         // 退出所有想要放任务的线程 ------- 任务槽已满
         fullCv_.notify_all();
-        {
-            while (!functions.empty())
-            {
-                functions.pop();
-            }
-            
-            std::unique_lock<std::mutex> lk(emptyLock_);
-            std::cout << "wait for child threads exiting...\n";
-            // 设置标志位->只有任务执行完毕(虚假唤醒)且函数拿完该wait函数才会继续执行
-            emptyCv_.wait(lk, [this] { return this->activeTask_ == 0; });
-        }
         
-        std::unique_lock<std::mutex> lk(childLock_);
-        std::cout << "等待所有子线程退出\n";
-        emptyCv_.notify_all();
-        chilidCv_.wait(lk,[this](){
-            return this->poolThreadCount_ == 0;
-        });
-        std::cout << "所有子线程退出\n";
-        for (size_t i = 0; i < threads.size(); i++) {
-            threads[i].join();
+        while (!functions.empty())
+        {
+            functions.pop();
         }
-        std::cout << "所有子线程合并到主线程\n";
+
+        for(std::thread &t:threads) {
+            // linux平台特有的停止方法
+            pthread_cancel(t.native_handle());
+            if(t.joinable()) {
+                t.join();
+            }
+        } 
     }
 private:
 
@@ -253,7 +243,8 @@ private:
             if (func != nullptr) {
                 Task task = taskPool->take(std::move(func));
                 // 执行任务函数
-                std::cout <<idString(std::this_thread::get_id()) << ":execute task function\n";
+                std::string id = idString(std::this_thread::get_id()) + ":execute task function\n";
+                std::cout << id;
                 ++activeTask_;
                 task();
                 --activeTask_;
@@ -262,7 +253,8 @@ private:
                 if (activeTask_ == 0 && functions.empty()) {
                     // 唤醒所有的线程
                     emptyCv_.notify_all();
-                    std::cout <<idString(std::this_thread::get_id()) << ":notify all sub-threads\n";
+                    std::string id = idString(std::this_thread::get_id()) + ":notify all sub-threads\n";
+                    std::cout << id;
                 }
             }else {
                 --poolThreadCount_;
