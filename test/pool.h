@@ -9,15 +9,18 @@ class PoolTest {
 public:
     void testWait() {
         ThreadPool::globalInstance()->start(16);
-        for(int i=0;i<49;++i) {
+        // 此处考虑不能无休止放入执行函数->导致服务器崩溃
+        for(int i=0;i<149;++i) {
             ThreadPool::globalInstance()->push(std::bind(&PoolTest::threadRunningCase1,this));
         }
+        std::cout << "全部任务加载进入线程池\n";
         ThreadPool::globalInstance()->push(std::bind(&PoolTest::threadRunningCase2,this));
+        // wait函数放在这个始终会等待所有的任务执行完毕
         ThreadPool::globalInstance()->wait();
     }
     void testStop() {
         ThreadPool::globalInstance()->start(16);
-        for(int i=0;i<49;++i) {
+        for(int i=0;i<149;++i) {
             ThreadPool::globalInstance()->push(std::bind(&PoolTest::threadRunningCase1,this));
         }
         ThreadPool::globalInstance()->push(std::bind(&PoolTest::threadRunningCase2,this));
@@ -27,7 +30,7 @@ public:
     }
 private:
     void threadRunningCase1() {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::seconds(5));
     }
     void threadRunningCase2() {
         std::this_thread::sleep_for(std::chrono::seconds(2));

@@ -19,11 +19,13 @@ typedef std::atomic<int> AtomicInt;
 // 函数队列中最大的函数数量
 #define MAX_FUNCTION_QUEUE_COUNT 1000 
 
+
 /**
  * 任务执行类
  */
 class Task {
 public:
+    Task():taskBusy_(false) {}
     /**
      * 给任务函数附着执行函数
      */
@@ -33,17 +35,11 @@ public:
     /**
      * 重载operator函数->函数的调用可以利用对象名即可 
      */
-    bool operator()() {
-        taskBusy_ = true;
-        func_();
-        taskBusy_ = false;
-        return true;
-    }
+    bool operator()();
     /**
-     * 任务函数是否忙碌->此任务还未执行完毕
+     * 判断任务是否结束 
      */
-    bool isTaskBusy() {
-        // 通过判断其是否在任务池中(主要用于避免Task任务的频繁分配与释放)
+    bool isBusy() {
         return taskBusy_;
     }
 
@@ -66,56 +62,47 @@ public:
         if (!isTaskCountInit_) {
             isTaskCountInit_ = true;
             // 环形队列区分为空和为满的情况
-            tasks.resize(count + 1);
+            tasks.resize(count);
         }
         return;
     }
 
     /**
-     * 从任务池中取出任务->从尾部拿任务
+     * 从任务池中取出任务放入执行函数->从尾部拿任务
      */
-    Task& take(TaskFunction &&func) {
-        std::lock_guard<std::mutex> lock(modifyQueueLock_);
-        ushort lastIndex = end_;
-        // 队列不为满
-        if (begin_ != (end_+1)%tasks.size()) {
-            end_ = (end_+1)%tasks.size();
-        }else {
-            std::unique_lock<std::mutex> lk(fullLock_);
-            // the aim to use outer while loop is to avoid fake wakeup
-            while (begin_ == (end_+1)%tasks.size()) { 
-                fullCv_.wait(lk, [&](){ return begin_ != (end_+1)%tasks.size();}); 
-            }
-            end_ = (end_+1)%tasks.size();
+    Task& push(TaskFunction &&func) { 
+        std::unique_lock<std::mutex> lk(fullLock_);
+        // the aim to use outer while loop is to avoid fake wakeup
+        while (isFull()) {
+            std::cout << "wait for the task poll releasing\n"; 
+            fullCv_.wait(lk, [&](){ return !isFull();}); 
         }
         // 完美转发右值引用
-        tasks[lastIndex].attach(std::forward<TaskFunction>(func)); 
-        emptyCv_.notify_one();
-        return tasks[lastIndex];
+        tasks[freeIndex].attach(std::forward<TaskFunction>(func)); 
+
+        return tasks[freeIndex];
     }
-    /**
-     * 从任务池中移除任务->从头部移除任务
-     */
-    void release() {
-        // 任务非空->等待任务池中不为空
-        std::unique_lock<std::mutex> lk(emptyLock_);
-        while (begin_==end_) { emptyCv_.wait(lk, [&](){ return begin_ != end_;}); }
-        // 等待第一个任务执行完毕
-        if (tasks[begin_].isTaskBusy()) {
-            // std::unique_lock<std::mutex> lk(taskRunningLock_);
-            // while (tasks[begin_].isTaskBusy()) { taskRunningCv_.wait(lk, [&](){ return !tasks[begin_].isTaskBusy();}); }
-        }
-        // 启动环形队列的头部index
-        begin_ = (begin_ + 1) % tasks.size();
+
+    void notify() {
         fullCv_.notify_one();
-        return;
+    }
+
+    /**
+     * 判断任务槽池是否为满 
+     */
+    bool isFull() {
+        bool flag = true;
+        for(int i=0;i<tasks.size();++i) {
+            if(!tasks[i].isBusy()) {
+                flag = false;
+                freeIndex = i;
+            }
+        }
+        return flag;
     }
 
 private:
-    TaskPool():isRunning_(false),isTaskCountInit_(false) {
-        // 和环形队列一样采用标志位
-        begin_ = 0;
-        end_ = 0;
+    TaskPool():isTaskCountInit_(false) {
         initTaskCount(MAX_TASK_POOL_COUNT);
     }
 
@@ -123,21 +110,12 @@ private:
     static std::shared_ptr<TaskPool> instance_;
     // 任务池
     std::vector<Task> tasks;
-    // header index + end index
-    ushort begin_;
-    ushort end_;
-    // 外部控制内部stop???
-    bool isRunning_;
     bool isTaskCountInit_;
     // lock and condition
     std::mutex fullLock_;
-    std::mutex emptyLock_;
-    std::mutex taskRunningLock_;
-    std::mutex modifyQueueLock_;
     std::condition_variable fullCv_;
-    std::condition_variable emptyCv_;
-    // the task API caller waitting for is still running
-    std::condition_variable taskRunningCv_;
+    // free index
+    int freeIndex;
 };
 
 /**
@@ -189,7 +167,7 @@ public:
         std::unique_lock<std::mutex> lk(childLock_);
         std::cout << "等待子线程退出\n";
         emptyCv_.notify_all();
-        chilidCv_.wait(lk,[this](){
+        childCv_.wait(lk,[this](){
             return this->poolThreadCount_ == 0;
         });
         std::cout << "所有子线程退出\n";
@@ -241,7 +219,9 @@ private:
             std::shared_ptr<TaskPool> taskPool = TaskPool::getInstance();
             TaskFunction func = take();
             if (func != nullptr) {
-                Task task = taskPool->take(std::move(func));
+                static std::atomic_int32_t count = 0;
+                ++count;
+                Task task = taskPool->push(std::move(func));
                 // 执行任务函数
                 std::string id = idString(std::this_thread::get_id()) + ":execute task function\n";
                 std::cout << id;
@@ -260,7 +240,7 @@ private:
                 --poolThreadCount_;
                 if (poolThreadCount_ == 0) {
                     // 通知等待线程退出(主线程)
-                    chilidCv_.notify_one();
+                    childCv_.notify_one();
                 }
                 break;
             }
@@ -293,7 +273,7 @@ private:
     std::condition_variable fullCv_;
     // 子线程清理
     std::mutex childLock_;
-    std::condition_variable chilidCv_;
+    std::condition_variable childCv_;
     // 活跃任务标志
     AtomicInt activeTask_;
     // 活跃线程标志

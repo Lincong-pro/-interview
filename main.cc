@@ -54,7 +54,7 @@ int main(int argc,char** argv) {
     taskPool.addTask(std::bind(&TestSharedError::run,testObj1,SharedErrorSolver::ENABLE_FROM_THIS));
     // test 3
     PoolTest testObj2;
-    taskPool.addTask(std::bind(&PoolTest::testStop,testObj2));
+    taskPool.addTask(std::bind(&PoolTest::testWait,testObj2));
     // start process
     taskPool.run();
     return 0;
